@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Painel de Segurança BLE - Uber</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            text-align: center;
+            background: #121212;
+            color: white;
+            padding: 20px;
+            margin: 0;
+        }
+        .container {
+            max-width: 500px;
+            margin: 50px auto;
+            background: #1e1e1e;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+        h2 { margin-top: 0; color: #f5f5f5; }
+        .btn-conectar {
+            background-color: #00ff66;
+            color: black;
+            border: none;
+            padding: 15px 30px;
+            font-size: 18px;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: 0.3s;
+            box-shadow: 0 4px 10px rgba(0, 255, 102, 0.3);
+        }
+        .btn-conectar:hover { background-color: #00cc52; }
+        .status {
+            font-size: 22px;
+            margin: 25px 0;
+            padding: 10px;
+            border-radius: 8px;
+            background: #2a2a2a;
+            color: #aaaaaa;
+        }
+        .conectado { color: #00ff66; border: 1px solid #00ff66; }
+        .alertado { 
+            background-color: #ff0000; 
+            color: white; 
+            font-weight: bold; 
+            animation: pisca 0.8s infinite; 
+        }
+        #log {
+            font-family: monospace;
+            background: #000;
+            color: #00ff00;
+            padding: 15px;
+            border-radius: 5px;
+            text-align: left;
+            min-height: 80px;
+            font-size: 13px;
+        }
+        @keyframes pisca {
+            0% { opacity: 1; }
+            50% { opacity: 0.3; }
+            100% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h2>Botão de Pânico (BLE)</h2>
+        <p>Conexão direta via navegador para motoristas</p>
+        
+        <button id="btnConectar" class="btn-conectar" onclick="conectarBluetooth()">🔌 Conectar Botão Físico</button>
+        
+        <div id="status" class="status">Desconectado</div>
+        
+        <h3>Histórico de Eventos:</h3>
+        <div id="log">Aguardando interação do usuário...</div>
+    </div>
+
+    <script>
+        // UUIDs definidos exatamente iguais aos do código do ESP32
+        const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+        const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+
+        let dispositivoBluetooth = null;
+        let caracteristicaPanico = null;
+
+        function atualizarLog(texto) {
+            const logDiv = document.getElementById('log');
+            logDiv.innerHTML += `> ${texto}<br>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        async function conectarBluetooth() {
+            atualizarLog("Buscando pelo dispositivo 'Panico_Uber_BLE'...");
+            
+            try {
+                // Solicita acesso ao dispositivo BLE específico
+                dispositivoBluetooth = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: "Panico_Uber_BLE" }],
+                    optionalServices: [SERVICE_UUID]
+                });
+
+                atualizarLog("Dispositivo encontrado! Conectando ao servidor GATT...");
+                const servidor = await dispositivoBluetooth.gatt.connect();
+
+                atualizarLog("Buscando o Serviço de Segurança...");
+                const servico = await servidor.getPrimaryService(SERVICE_UUID);
+
+                atualizarLog("Buscando a característica de acionamento...");
+                caracteristicaPanico = await servico.getCharacteristic(CHARACTERISTIC_UUID);
+
+                // Começa a escutar as notificações enviadas pelo ESP32 em tempo real
+                await caracteristicaPanico.startNotifications();
+                caracteristicaPanico.addEventListener('characteristicvaluechanged', processarDadosBotao);
+
+                // Atualiza a Interface do Usuário
+                const statusDiv = document.getElementById('status');
+                statusDiv.innerText = "🟢 Botão Ativo e Conectado";
+                statusDiv.className = "status conectado";
+                document.getElementById('btnConectar').style.display = "none";
+                atualizarLog("Tudo pronto! O sistema está vigiando o botão físico.");
+
+                // Monitora se o dispositivo desconectar sozinho
+                dispositivoBluetooth.addEventListener('gattserverdisconnected', aoDesconectar);
+
+            } catch (erro) {
+                atualizarLog(`Erro ao conectar: ${erro}`);
+                console.error(erro);
+            }
+        }
+
+        function processarDadosBotao(event) {
+            let valor = event.target.value.getUint8(0);
+            
+            if (valor === 1) {
+                atualizarLog("🚨 ALERTA RECEBIDO DO ESP32!");
+                dispararAlertaEmergencia();
+            }
+        }
+
+        function dispararAlertaEmergencia() {
+            const statusDiv = document.getElementById('status');
+            statusDiv.innerText = "🚨 EMERGÊNCIA DISPARADA! 🚨";
+            statusDiv.className = "status alertado";
+
+            atualizarLog("Requisitando coordenadas de satélite (GPS) do celular...");
+            
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(enviarDadosSocorro, erroAoPegarGPS, {
+                    enableHighAccuracy: true,
+                    timeout: 5000,
+                    maximumAge: 0
+                });
+            } else {
+                atualizarLog("GPS não suportado neste navegador. Enviando alerta sem coordenadas...");
+                enviarDadosSocorro(null);
+            }
+        }
+
+        function enviarDadosSocorro(posicao) {
+            let lat = posicao ? posicao.coords.latitude : "Não detectada";
+            let lon = posicao ? posicao.coords.longitude : "Não detectada";
+            let precisao = posicao ? posicao.coords.accuracy : 0;
+
+            atualizarLog(`Coordenadas obtidas! Lat: ${lat}, Lon: ${lon} (Precisão: ${precisao}m)`);
+            atualizarLog(`Link gerado: https://google.com{lat},${lon}`);
+            
+            // --- ÁREA DE INTEGRAÇÃO COM A INTERNET MÓVEL ---
+            // O código abaixo simula o disparo externo. Como você está usando Bluetooth, 
+            // a internet móvel do celular está livre para fazer requisições HTTP normais.
+            
+            atualizarLog("Simulando envio de dados para a central via 4G/5G...");
+            
+            /* 
+            Exemplo real de envio para API externa via Fetch:
+            fetch('https://suacentral.com', {
+                method: 'POST',
+                body: JSON.stringify({ motorista: "ID_123", local: {lat, lon} })
+            });
+            */
+            
+            setTimeout(() => {
+                atualizarLog("🔒 Confirmação recebida: Alerta registrado na nuvem com sucesso!");
+            }, 1500);
+        }
+
+        function erroAoPegarGPS(erro) {
+            atualizarLog(`Falha ao obter GPS (${erro.message}). Prosseguindo sem localização...`);
+            enviarDadosSocorro(null);
+        }
+
+        function aoDesconectar() {
+            atualizarLog("⚠️ Conexão perdida com o ESP32.");
+            const statusDiv = document.getElementById('status');
+            statusDiv.innerText = "Desconectado";
+            statusDiv.className = "status";
+            document.getElementById('btnConectar').style.display = "inline-block";
+        }
+    </script>
+</body>
+</html>
